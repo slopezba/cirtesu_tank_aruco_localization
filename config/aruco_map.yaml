@@ -1,0 +1,31 @@
+alpha_pos: 0.4
+alpha_yaw: 0.3
+
+sigma_dist: 1.0
+aruco_yaw_offset: -1.5708
+
+world_frame: world_ned
+base_frame: girona500/base_link
+camera_frame: girona500/down_camera/camera
+
+aruco_topic: /girona500/down_camera/aruco_detections
+marker_topic: /tandem_girona/aruco_map_markers
+pose_topic: /girona500/navigator/aruco_pose
+
+mesh_path: package://girona500_description/meshes/cirtesu.dae
+
+mesh_scale: [1.0, 1.0, 1.0]
+mesh_pos: [0.0, 0.0, 0.2]
+mesh_yaw: 0.0
+
+aruco_map:
+  "0": [-1.35, 3.0, 5.0]
+  "1": [-4.35, -3.0, 5.0]
+  "2": [1.65, 0.0, 5.0]
+  "3": [1.65, 3.0, 5.0]
+  "4": [-1.35, 0.0, 5.0]
+  "5": [-4.35, 3.0, 5.0]
+  "6": [-4.35, 0.0, 5.0]
+  "7": [-1.35, -3.0, 5.0]
+  "8": [1.65, -3.0, 5.0]
+

@@ -1,0 +1,16 @@
+<launch>
+
+  <node pkg="cirtesu_tank_aruco_localization"
+        type="aruco_map_localization_node"
+        name="aruco_map_localization"
+        output="screen">
+
+    <rosparam file="$(find cirtesu_tank_aruco_localization)/config/aruco_map.yaml"/>
+
+  </node>
+  
+  <node name="nedtocirtesu" pkg="tf2_ros" type="static_transform_publisher"
+        args="0 0 0 3.1416 0 0 world_ned cirtesu_base_link" />
+
+</launch>
+

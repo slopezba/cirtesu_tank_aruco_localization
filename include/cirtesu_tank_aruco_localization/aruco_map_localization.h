@@ -1,39 +1,50 @@
 #pragma once
 
-#include <ros/ros.h>
-
-#include <aruco_opencv_msgs/ArucoDetection.h>
-#include <visualization_msgs/MarkerArray.h>
-#include <geometry_msgs/PoseWithCovarianceStamped.h>
-
-#include <tf2_ros/transform_listener.h>
+#include <aruco_opencv_msgs/msg/aruco_detection.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/buffer.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_ros/create_timer_ros.h>
+#include <tf2_ros/transform_listener.h>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <Eigen/Dense>
+
 #include <map>
+#include <memory>
+#include <string>
 #include <vector>
 
-class ArucoMapLocalization
+class ArucoMapLocalization : public rclcpp::Node
 {
 public:
-  ArucoMapLocalization(ros::NodeHandle& nh);
+  explicit ArucoMapLocalization(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
 
 private:
+  using ArucoDetection = aruco_opencv_msgs::msg::ArucoDetection;
+  using MarkerArray = visualization_msgs::msg::MarkerArray;
+  using PoseWithCovarianceStamped = geometry_msgs::msg::PoseWithCovarianceStamped;
 
-  // ===== ROS =====
+  void loadParameters();
+  void loadArucoMap();
+  void publishMapMarkers(const std::vector<int>& visible_ids = {});
+  void arucoCallback(const ArucoDetection::SharedPtr msg);
+  Eigen::Vector3d transformMapPosition(
+      const Eigen::Vector3d& position,
+      const geometry_msgs::msg::TransformStamped& transform) const;
+  Eigen::Vector3d baseVectorToEnu(const Eigen::Vector3d& vector) const;
+  double normalizeAngle(double angle) const;
 
-  ros::NodeHandle nh_;
-  ros::Subscriber aruco_sub_;
-  ros::Publisher marker_pub_;
-  ros::Publisher pose_pub_;
+  rclcpp::Subscription<ArucoDetection>::SharedPtr aruco_sub_;
+  rclcpp::Publisher<MarkerArray>::SharedPtr marker_pub_;
+  rclcpp::Publisher<PoseWithCovarianceStamped>::SharedPtr pose_pub_;
 
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
-
-  // ===== Frames & topics =====
+  std::shared_ptr<tf2_ros::CreateTimerROS> tf_timer_interface_;
 
   std::string world_frame_;
+  std::string marker_frame_;
   std::string base_frame_;
   std::string camera_frame_;
 
@@ -41,13 +52,9 @@ private:
   std::string marker_topic_;
   std::string pose_topic_;
 
-  // ===== Parameters =====
-
   double alpha_pos_;
   double alpha_yaw_;
-
   double sigma_dist_;
-
   double aruco_yaw_offset_;
 
   std::string mesh_path_;
@@ -55,20 +62,9 @@ private:
   std::vector<double> mesh_pos_;
   double mesh_yaw_;
 
-  // ===== Aruco map =====
-
   std::map<int, Eigen::Vector3d> aruco_map_;
-
-  // ===== Filter memory =====
 
   bool first_measurement_;
   Eigen::Vector3d prev_pos_;
   double prev_yaw_;
-
-  // ===== Methods =====
-
-  void arucoCallback(const aruco_opencv_msgs::ArucoDetection::ConstPtr& msg);
-
-  double normalizeAngle(double a);
 };
-

@@ -1,229 +1,301 @@
 #include "cirtesu_tank_aruco_localization/aruco_map_localization.h"
 
-#include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/time.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 
-// =====================================================
-
-ArucoMapLocalization::ArucoMapLocalization(ros::NodeHandle& nh)
-: nh_(nh),
+ArucoMapLocalization::ArucoMapLocalization(const rclcpp::NodeOptions& options)
+: rclcpp::Node("aruco_map_localization", options),
+  tf_buffer_(get_clock()),
   tf_listener_(tf_buffer_),
-  first_measurement_(true)
+  first_measurement_(true),
+  prev_pos_(Eigen::Vector3d::Zero()),
+  prev_yaw_(0.0)
 {
-  // =============================
-  // Load parameters
-  // =============================
+  tf_timer_interface_ = std::make_shared<tf2_ros::CreateTimerROS>(
+      get_node_base_interface(),
+      get_node_timers_interface());
+  tf_buffer_.setCreateTimerInterface(tf_timer_interface_);
 
-  nh_.param("alpha_pos", alpha_pos_, 0.4);
-  nh_.param("alpha_yaw", alpha_yaw_, 0.3);
+  loadParameters();
+  loadArucoMap();
 
-  nh_.param("sigma_dist", sigma_dist_, 1.0);
-  nh_.param("aruco_yaw_offset", aruco_yaw_offset_, -M_PI/2.0);
+  aruco_sub_ = create_subscription<ArucoDetection>(
+      aruco_topic_,
+      rclcpp::SensorDataQoS(),
+      std::bind(&ArucoMapLocalization::arucoCallback, this, std::placeholders::_1));
 
-  nh_.param("world_frame", world_frame_, std::string("world_ned"));
-  nh_.param("base_frame", base_frame_, std::string("girona500/base_link"));
-  nh_.param("camera_frame", camera_frame_, std::string("girona500/down_camera/camera"));
+  marker_pub_ = create_publisher<MarkerArray>(marker_topic_, 1);
+  pose_pub_ = create_publisher<PoseWithCovarianceStamped>(pose_topic_, 1);
 
-  nh_.param("aruco_topic", aruco_topic_, std::string("/girona500/down_camera/aruco_detections"));
-  nh_.param("marker_topic", marker_topic_, std::string("/tandem_girona/aruco_map_markers"));
-  nh_.param("pose_topic", pose_topic_, std::string("/girona500/navigator/aruco_pose"));
+  RCLCPP_INFO(get_logger(), "Aruco map localization C++ node started");
+}
 
-  nh_.param("mesh_path", mesh_path_, std::string("package://girona500_description/meshes/cirtesu.dae"));
-  nh_.getParam("mesh_scale", mesh_scale_);
-  nh_.getParam("mesh_pos", mesh_pos_);
-  nh_.param("mesh_yaw", mesh_yaw_, 0.0);
-
-  // =============================
-  // Load ArUco map
-  // =============================
-
-  XmlRpc::XmlRpcValue map_param;
-
-  if (nh_.getParam("aruco_map", map_param))
-  {
-    for (auto it = map_param.begin(); it != map_param.end(); ++it)
-    {
-      int id = std::stoi(it->first);
-      XmlRpc::XmlRpcValue val = it->second;
-
-      Eigen::Vector3d p;
-      p << double(val[0]), double(val[1]), double(val[2]);
-
-      aruco_map_[id] = p;
+void ArucoMapLocalization::loadParameters()
+{
+  const auto get_double = [this](const std::string& name, double default_value) {
+    if (!has_parameter(name)) {
+      return declare_parameter<double>(name, default_value);
     }
+
+    return get_parameter(name).as_double();
+  };
+
+  const auto get_string = [this](const std::string& name, const std::string& default_value) {
+    if (!has_parameter(name)) {
+      return declare_parameter<std::string>(name, default_value);
+    }
+
+    return get_parameter(name).as_string();
+  };
+
+  const auto get_double_array =
+      [this](const std::string& name, const std::vector<double>& default_value) {
+        if (!has_parameter(name)) {
+          return declare_parameter<std::vector<double>>(name, default_value);
+        }
+
+        return get_parameter(name).as_double_array();
+      };
+
+  alpha_pos_ = get_double("alpha_pos", 0.4);
+  alpha_yaw_ = get_double("alpha_yaw", 0.3);
+  sigma_dist_ = get_double("sigma_dist", 1.0);
+  aruco_yaw_offset_ = get_double("aruco_yaw_offset", -M_PI / 2.0);
+
+  world_frame_ = get_string("world_frame", "world_ned");
+  marker_frame_ = get_string("marker_frame", world_frame_);
+  base_frame_ = get_string("base_frame", "girona500/base_link");
+  camera_frame_ = get_string("camera_frame", "girona500/down_camera/camera");
+
+  aruco_topic_ = get_string("aruco_topic", "/girona500/down_camera/aruco_detections");
+  marker_topic_ = get_string("marker_topic", "/tandem_girona/aruco_map_markers");
+  pose_topic_ = get_string("pose_topic", "/girona500/navigator/aruco_pose");
+
+  mesh_path_ = get_string("mesh_path", "package://girona500_description/meshes/cirtesu.dae");
+  mesh_scale_ = get_double_array("mesh_scale", {1.0, 1.0, 1.0});
+  mesh_pos_ = get_double_array("mesh_pos", {0.0, 0.0, 0.2});
+  mesh_yaw_ = get_double("mesh_yaw", 0.0);
+
+  if (mesh_scale_.size() != 3) {
+    RCLCPP_WARN(get_logger(), "mesh_scale must contain 3 values. Using default scale.");
+    mesh_scale_ = {1.0, 1.0, 1.0};
   }
 
-  // =============================
-  // ROS interfaces
-  // =============================
-
-  aruco_sub_ = nh_.subscribe(
-      aruco_topic_, 1,
-      &ArucoMapLocalization::arucoCallback, this);
-
-  marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
-      marker_topic_, 1);
-
-  pose_pub_ = nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>(
-      pose_topic_, 1);
-
-  ROS_INFO("Aruco map localization C++ node started");
+  if (mesh_pos_.size() != 3) {
+    RCLCPP_WARN(get_logger(), "mesh_pos must contain 3 values. Using default position.");
+    mesh_pos_ = {0.0, 0.0, 0.2};
+  }
 }
 
-// =====================================================
-
-double ArucoMapLocalization::normalizeAngle(double a)
+void ArucoMapLocalization::loadArucoMap()
 {
-  return atan2(sin(a), cos(a));
+  const auto aruco_map_parameters = list_parameters({"aruco_map"}, 2);
+
+  for (const auto& parameter_name : aruco_map_parameters.names) {
+    rclcpp::Parameter marker_position;
+    if (!get_parameter(parameter_name, marker_position)) {
+      continue;
+    }
+
+    const auto marker_id = parameter_name.substr(std::string("aruco_map.").size());
+
+    if (marker_position.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY) {
+      RCLCPP_WARN(
+          get_logger(),
+          "Ignoring aruco_map.%s because it is not a double array.",
+          marker_id.c_str());
+      continue;
+    }
+
+    const auto values = marker_position.as_double_array();
+    if (values.size() != 3) {
+      RCLCPP_WARN(
+          get_logger(),
+          "Ignoring aruco_map.%s because it does not contain 3 values.",
+          marker_id.c_str());
+      continue;
+    }
+
+    aruco_map_[std::stoi(marker_id)] = Eigen::Vector3d(values[0], values[1], values[2]);
+  }
+
+  RCLCPP_INFO(get_logger(), "Loaded %zu ArUco map markers.", aruco_map_.size());
 }
 
-// =====================================================
-
-void ArucoMapLocalization::arucoCallback(
-    const aruco_opencv_msgs::ArucoDetection::ConstPtr& msg)
+double ArucoMapLocalization::normalizeAngle(double angle) const
 {
-  std::vector<int> visible_ids;
+  return std::atan2(std::sin(angle), std::cos(angle));
+}
 
-  for (auto& m : msg->markers)
-    visible_ids.push_back(m.marker_id);
+Eigen::Vector3d ArucoMapLocalization::transformMapPosition(
+    const Eigen::Vector3d& position,
+    const geometry_msgs::msg::TransformStamped& transform) const
+{
+  geometry_msgs::msg::PointStamped map_point;
+  map_point.header.frame_id = marker_frame_;
+  map_point.header.stamp = transform.header.stamp;
+  map_point.point.x = position.x();
+  map_point.point.y = position.y();
+  map_point.point.z = position.z();
 
-  // =====================================================
-  // 1) Publish MarkerArray (BASE FRAME)
-  // =====================================================
+  geometry_msgs::msg::PointStamped world_point;
+  tf2::doTransform(map_point, world_point, transform);
 
-  visualization_msgs::MarkerArray array;
+  return Eigen::Vector3d(world_point.point.x, world_point.point.y, world_point.point.z);
+}
 
-  visualization_msgs::Marker mesh;
+Eigen::Vector3d ArucoMapLocalization::baseVectorToEnu(const Eigen::Vector3d& vector) const
+{
+  return Eigen::Vector3d(vector.y(), vector.x(), -vector.z());
+}
 
-  mesh.header.frame_id = "cirtesu_base_link";
-  mesh.header.stamp = ros::Time::now();
+void ArucoMapLocalization::publishMapMarkers(const std::vector<int>& visible_ids)
+{
+  MarkerArray array;
+  const auto marker_stamp = get_clock()->now();
 
+  visualization_msgs::msg::Marker mesh;
+  mesh.header.frame_id = marker_frame_;
+  mesh.header.stamp = marker_stamp;
   mesh.ns = "cirtesu_mesh";
   mesh.id = 1000;
-  mesh.type = visualization_msgs::Marker::MESH_RESOURCE;
-
+  mesh.type = visualization_msgs::msg::Marker::MESH_RESOURCE;
   mesh.mesh_resource = mesh_path_;
   mesh.mesh_use_embedded_materials = true;
-
   mesh.scale.x = mesh_scale_[0];
   mesh.scale.y = mesh_scale_[1];
   mesh.scale.z = mesh_scale_[2];
-
   mesh.pose.position.x = mesh_pos_[0];
   mesh.pose.position.y = mesh_pos_[1];
   mesh.pose.position.z = mesh_pos_[2];
 
   tf2::Quaternion q_mesh;
   q_mesh.setRPY(M_PI, 0.0, mesh_yaw_);
-
   mesh.pose.orientation = tf2::toMsg(q_mesh);
   mesh.color.a = 1.0;
 
   array.markers.push_back(mesh);
 
-  for (auto& kv : aruco_map_)
-  {
-    visualization_msgs::Marker m;
+  for (const auto& aruco : aruco_map_) {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = marker_frame_;
+    marker.header.stamp = marker_stamp;
+    marker.ns = "aruco_map";
+    marker.id = aruco.first;
+    marker.type = visualization_msgs::msg::Marker::CUBE;
+    marker.pose.position.x = aruco.second.x();
+    marker.pose.position.y = aruco.second.y();
+    marker.pose.position.z = aruco.second.z();
+    tf2::Quaternion q_marker;
+    q_marker.setRPY(0.0, 0.0, mesh_yaw_);
+    marker.pose.orientation = tf2::toMsg(q_marker);
+    marker.scale.x = 0.30;
+    marker.scale.y = 0.30;
+    marker.scale.z = 0.08;
+    marker.color.g = 1.0;
+    marker.color.a = 0.8;
 
-    m.header = mesh.header;
-    m.ns = "aruco_map";
-    m.id = kv.first;
-
-    m.type = visualization_msgs::Marker::CUBE;
-
-    m.pose.position.x = kv.second.x();
-    m.pose.position.y = kv.second.y();
-    m.pose.position.z = kv.second.z();
-    m.pose.orientation.w = 1.0;
-
-    m.scale.x = 0.30;
-    m.scale.y = 0.30;
-    m.scale.z = 0.08;
-
-    // GREEN default
-    m.color.g = 1.0;
-    m.color.a = 0.8;
-
-    // YELLOW if visible
-    if (std::find(visible_ids.begin(),
-                  visible_ids.end(),
-                  kv.first) != visible_ids.end())
-    {
-      m.color.r = 1.0;
-      m.color.g = 1.0;
+    if (std::find(visible_ids.begin(), visible_ids.end(), aruco.first) != visible_ids.end()) {
+      marker.color.r = 1.0;
+      marker.color.g = 1.0;
     }
 
-    array.markers.push_back(m);
+    array.markers.push_back(marker);
   }
 
-  marker_pub_.publish(array);
+  marker_pub_->publish(array);
+}
 
-  // =====================================================
-  // 2) Robot localization
-  // =====================================================
-
-  if (msg->markers.empty())
+void ArucoMapLocalization::arucoCallback(const ArucoDetection::SharedPtr msg)
+{
+  if (msg->markers.empty()) {
+    publishMapMarkers({});
     return;
+  }
 
-  geometry_msgs::TransformStamped tf_base_cam;
+  std::vector<int> visible_ids;
 
-  try
-  {
+  for (const auto& marker : msg->markers) {
+    visible_ids.push_back(marker.marker_id);
+  }
+
+  publishMapMarkers(visible_ids);
+
+  geometry_msgs::msg::TransformStamped tf_base_cam;
+  geometry_msgs::msg::TransformStamped tf_world_map;
+
+  try {
     tf_base_cam = tf_buffer_.lookupTransform(
         base_frame_,
         camera_frame_,
-        ros::Time(0),
-        ros::Duration(0.2));
+        tf2::TimePointZero,
+        tf2::durationFromSec(0.2));
+  } catch (const tf2::TransformException& ex) {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "TF base->camera not available: %s",
+        ex.what());
+    return;
   }
-  catch (...)
-  {
-    ROS_WARN_THROTTLE(1.0, "TF base->camera not available");
+
+  try {
+    tf_world_map = tf_buffer_.lookupTransform(
+        world_frame_,
+        marker_frame_,
+        tf2::TimePointZero,
+        tf2::durationFromSec(0.2));
+  } catch (const tf2::TransformException& ex) {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "TF world->aruco map not available: %s",
+        ex.what());
     return;
   }
 
   std::vector<Eigen::Vector3d> estimates;
   std::vector<double> weights;
-
   std::vector<double> yaw_estimates;
   std::vector<double> yaw_weights;
 
-  for (auto& marker : msg->markers)
-  {
-    int id = marker.marker_id;
+  for (const auto& marker : msg->markers) {
+    const int id = marker.marker_id;
 
-    if (!aruco_map_.count(id))
+    if (!aruco_map_.count(id)) {
       continue;
+    }
 
-    geometry_msgs::PoseStamped cam_marker;
+    geometry_msgs::msg::PoseStamped cam_marker;
     cam_marker.header = msg->header;
     cam_marker.pose = marker.pose;
 
-    geometry_msgs::PoseStamped base_marker;
+    geometry_msgs::msg::PoseStamped base_marker;
 
-    try
-    {
+    try {
       tf2::doTransform(cam_marker, base_marker, tf_base_cam);
-    }
-    catch (...)
-    {
+    } catch (const tf2::TransformException&) {
       continue;
     }
 
-    Eigen::Vector3d world_marker = aruco_map_[id];
-
-    Eigen::Vector3d base_pos(
+    const Eigen::Vector3d world_marker = transformMapPosition(aruco_map_[id], tf_world_map);
+    const Eigen::Vector3d base_pos(
         base_marker.pose.position.x,
         base_marker.pose.position.y,
         base_marker.pose.position.z);
+    const Eigen::Vector3d marker_offset_enu = baseVectorToEnu(base_pos);
 
-    Eigen::Vector3d robot_est = world_marker - base_pos;
-
-    double dist = base_pos.norm();
-    double weight = exp(-(dist * dist) / (2.0 * sigma_dist_ * sigma_dist_));
+    const Eigen::Vector3d robot_est = world_marker - marker_offset_enu;
+    const double dist = base_pos.norm();
+    const double weight = std::exp(-(dist * dist) / (2.0 * sigma_dist_ * sigma_dist_));
 
     estimates.push_back(robot_est);
     weights.push_back(weight);
@@ -231,150 +303,89 @@ void ArucoMapLocalization::arucoCallback(
     tf2::Quaternion q;
     tf2::fromMsg(base_marker.pose.orientation, q);
 
-    double roll, pitch, yaw_marker;
+    double roll = 0.0;
+    double pitch = 0.0;
+    double yaw_marker = 0.0;
     tf2::Matrix3x3(q).getRPY(roll, pitch, yaw_marker);
 
-    double yaw_robot = normalizeAngle(yaw_marker + aruco_yaw_offset_);
-
+    const double yaw_robot = normalizeAngle(yaw_marker + aruco_yaw_offset_);
     yaw_estimates.push_back(yaw_robot);
     yaw_weights.push_back(weight);
   }
 
-  if (estimates.empty())
+  if (estimates.empty()) {
     return;
+  }
 
   Eigen::Vector3d mean_pos = Eigen::Vector3d::Zero();
   double sum_w = 0.0;
 
-  for (size_t i = 0; i < estimates.size(); ++i)
-  {
-    mean_pos += weights[i] * estimates[i];
-    sum_w += weights[i];
+  for (size_t index = 0; index < estimates.size(); ++index) {
+    mean_pos += weights[index] * estimates[index];
+    sum_w += weights[index];
   }
 
   mean_pos /= sum_w;
 
-  double sin_sum = 0.0, cos_sum = 0.0;
+  double sin_sum = 0.0;
+  double cos_sum = 0.0;
 
-  for (size_t i = 0; i < yaw_estimates.size(); ++i)
-  {
-    sin_sum += sin(yaw_estimates[i]) * yaw_weights[i];
-    cos_sum += cos(yaw_estimates[i]) * yaw_weights[i];
+  for (size_t index = 0; index < yaw_estimates.size(); ++index) {
+    sin_sum += std::sin(yaw_estimates[index]) * yaw_weights[index];
+    cos_sum += std::cos(yaw_estimates[index]) * yaw_weights[index];
   }
 
-  double mean_yaw = atan2(sin_sum, cos_sum);
-
-  // =====================================================
-  // Temporal filter (EMA)
-  // =====================================================
-
+  const double mean_yaw = std::atan2(sin_sum, cos_sum);
   Eigen::Vector3d filt_pos;
-  double filt_yaw;
+  double filt_yaw = 0.0;
 
-  if (first_measurement_)
-  {
+  if (first_measurement_) {
     filt_pos = mean_pos;
     filt_yaw = mean_yaw;
     first_measurement_ = false;
-  }
-  else
-  {
-    filt_pos = alpha_pos_ * mean_pos +
-               (1.0 - alpha_pos_) * prev_pos_;
-
-    double dyaw = normalizeAngle(mean_yaw - prev_yaw_);
+  } else {
+    filt_pos = alpha_pos_ * mean_pos + (1.0 - alpha_pos_) * prev_pos_;
+    const double dyaw = normalizeAngle(mean_yaw - prev_yaw_);
     filt_yaw = prev_yaw_ + alpha_yaw_ * dyaw;
   }
 
   prev_pos_ = filt_pos;
   prev_yaw_ = filt_yaw;
 
-  // =====================================================
-  // Build local pose (base_link)
-  // =====================================================
+  PoseWithCovarianceStamped out;
 
-  geometry_msgs::PoseWithCovarianceStamped out;
-
-  out.header.stamp = ros::Time::now();
-  out.header.frame_id = "cirtesu_base_link";
-
+  out.header.stamp = get_clock()->now();
+  out.header.frame_id = world_frame_;
   out.pose.pose.position.x = filt_pos.x();
   out.pose.pose.position.y = filt_pos.y();
   out.pose.pose.position.z = filt_pos.z();
 
   tf2::Quaternion q_out;
-  q_out.setRPY(0, 0, -filt_yaw);
-
+  q_out.setRPY(0.0, 0.0, -filt_yaw);
   out.pose.pose.orientation = tf2::toMsg(q_out);
 
-  double sigma_xy  = 0.13  / sqrt(sum_w);
-  double sigma_z   = 0.005 / sqrt(sum_w);
-  double sigma_yaw = 1.0   / sqrt(sum_w);
+  const double sigma_xy = 0.13 / std::sqrt(sum_w);
+  const double sigma_z = 0.005 / std::sqrt(sum_w);
+  const double sigma_yaw = 1.0 / std::sqrt(sum_w);
 
-  out.pose.covariance[0]  = sigma_xy;
-  out.pose.covariance[7]  = sigma_xy;
+  out.pose.covariance[0] = sigma_xy;
+  out.pose.covariance[7] = sigma_xy;
   out.pose.covariance[14] = sigma_z;
   out.pose.covariance[35] = sigma_yaw;
 
-  // =====================================================
-  // Transform pose to world_ned (IDENTICAL to Python)
-  // =====================================================
-
-  geometry_msgs::PoseStamped pose_local;
-  pose_local.header.stamp = out.header.stamp;
-  pose_local.header.frame_id = "cirtesu_base_link";
-  pose_local.pose = out.pose.pose;
-
-  geometry_msgs::TransformStamped tf_world_base;
-
-  try
-  {
-    tf_world_base = tf_buffer_.lookupTransform(
-        world_frame_,
-        "cirtesu_base_link",
-        ros::Time(0),
-        ros::Duration(0.2));
-  }
-  catch (...)
-  {
-    ROS_WARN_THROTTLE(1.0, "TF world_ned -> base not available");
-    return;
-  }
-
-  geometry_msgs::PoseStamped pose_world;
-
-  try
-  {
-    tf2::doTransform(pose_local, pose_world, tf_world_base);
-  }
-  catch (...)
-  {
-    ROS_WARN("Pose transform failed");
-    return;
-  }
-
-  // =====================================================
-  // Publish FINAL pose in world_ned
-  // =====================================================
-
-  out.header.frame_id = "world_ned";
-  out.pose.pose = pose_world.pose;
-
-  pose_pub_.publish(out);
+  pose_pub_->publish(out);
 }
-
-// =====================================================
 
 int main(int argc, char** argv)
 {
-  ros::init(argc, argv, "aruco_map_localization");
+  rclcpp::init(argc, argv);
 
-  ros::NodeHandle nh("~");
+  rclcpp::NodeOptions options;
+  options.allow_undeclared_parameters(true);
+  options.automatically_declare_parameters_from_overrides(true);
 
-  ArucoMapLocalization node(nh);
+  rclcpp::spin(std::make_shared<ArucoMapLocalization>(options));
+  rclcpp::shutdown();
 
-  ros::spin();
-
-  return 0;
+  return EXIT_SUCCESS;
 }
-

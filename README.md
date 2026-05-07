@@ -1,15 +1,15 @@
 # cirtesu_tank_aruco_localization
 
-**ROS Noetic C++ package for ArUco-based localization in CIRTESU tank environments**
+**ROS 2 Humble C++ package for ArUco-based localization in CIRTESU tank environments**
 
-This repository provides a ROS Noetic package that implements a marker-map-based localization system using ArUco detections and TF2 transformations. It is designed for the Girona500 underwater robot and for use in CIRTESU tank experiments and Stonefish simulation.
+This repository provides a ROS 2 Humble package that implements a marker-map-based localization system using ArUco detections and TF2 transformations. It is designed for the Girona500 underwater robot and for use in CIRTESU tank experiments and Stonefish simulation.
 
 ---
 
 ## Features
 
-- Fully implemented in C++ (roscpp)
-- Compatible with ROS Noetic (Ubuntu 20.04)
+- Fully implemented in C++ (rclcpp)
+- Compatible with ROS 2 Humble (Ubuntu 22.04)
 - TF2-based frame transformations
 - Publishes RViz visualization markers
 - Publishes robot pose with covariance
@@ -75,7 +75,7 @@ Topic:
 /girona500/down_camera/aruco_detections
 
 Type:
-aruco_opencv_msgs/ArucoDetection
+aruco_opencv_msgs/msg/ArucoDetection
 
 ---
 
@@ -96,9 +96,9 @@ aruco_yaw_offset: Camera-to-robot yaw correction
 
 ## Dependencies
 
-Required ROS Noetic packages:
+Required ROS 2 Humble packages:
 
-- roscpp
+- rclcpp
 - tf2
 - tf2_ros
 - tf2_geometry_msgs
@@ -109,28 +109,23 @@ Required ROS Noetic packages:
 
 Install dependencies:
 
-sudo apt install ros-noetic-tf2-geometry-msgs ros-noetic-aruco-opencv
+sudo apt install ros-humble-tf2-geometry-msgs ros-humble-aruco-opencv-msgs
 
 ---
 
 ## Build Instructions
 
-From your ROS Noetic workspace:
+From your ROS 2 Humble workspace root:
 
-cd ~/catkin_ws_stonefish_cirtesu
-catkin build cirtesu_tank_aruco_localization
-source devel/setup.bash
-
-Or using catkin_make:
-
-catkin_make
-source devel/setup.bash
+cd ~/cirtesub_ws
+colcon build --packages-select cirtesu_tank_aruco_localization
+source install/setup.bash
 
 ---
 
 ## Run the Node
 
-roslaunch cirtesu_tank_aruco_localization aruco_map_localization.launch
+ros2 launch cirtesu_tank_aruco_localization aruco_map_localization.launch.py
 
 Expected output:
 
@@ -142,11 +137,11 @@ Expected output:
 
 Check pose output:
 
-rostopic echo /girona500/navigator/aruco_pose
+ros2 topic echo /girona500/navigator/aruco_pose
 
 Check TF:
 
-rosrun tf tf_echo world_ned girona500/base_link
+ros2 run tf2_ros tf2_echo world_ned girona500/base_link
 
 Visualize markers:
 
@@ -160,7 +155,7 @@ Topic: /tandem_girona/aruco_map_markers
 
 - Girona500 (Stonefish simulation)
 - CIRTESU tank ArUco map
-- ROS Noetic (Ubuntu 20.04)
+- ROS 2 Humble (Ubuntu 22.04)
 - aruco_opencv
 
 ---

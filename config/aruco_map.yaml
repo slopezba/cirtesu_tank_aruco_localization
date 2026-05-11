@@ -15,7 +15,7 @@ aruco_map_localization:
     marker_topic: /cirtesub/aruco/markers
     pose_topic: /cirtesub/sensors/aruco/pose_enu
 
-    mesh_path: package://cirtesub_stonefish/resources/cirtesu/cirtesu.dae
+    mesh_path: package://cirtesu_tank_aruco_localization/meshes/cirtesu.dae
 
     mesh_scale: [1.0, 1.0, 1.0]
     mesh_pos: [0.0, 0.0, 0.2]

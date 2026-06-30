@@ -25,6 +25,12 @@ private:
   using MarkerArray = visualization_msgs::msg::MarkerArray;
   using PoseWithCovarianceStamped = geometry_msgs::msg::PoseWithCovarianceStamped;
 
+  struct ArucoMarker
+  {
+    Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+    double yaw{0.0};
+  };
+
   void loadParameters();
   void loadArucoMap();
   void publishMapMarkers(const std::vector<int>& visible_ids = {});
@@ -32,7 +38,11 @@ private:
   Eigen::Vector3d transformMapPosition(
       const Eigen::Vector3d& position,
       const geometry_msgs::msg::TransformStamped& transform) const;
-  Eigen::Vector3d baseVectorToEnu(const Eigen::Vector3d& vector) const;
+  double transformMapYaw(
+      double yaw,
+      const geometry_msgs::msg::TransformStamped& transform) const;
+  Eigen::Vector3d baseVectorToWorld(const Eigen::Vector3d& vector, double yaw) const;
+  std::string namespacedFrame(const std::string& frame_name) const;
   double normalizeAngle(double angle) const;
 
   rclcpp::Subscription<ArucoDetection>::SharedPtr aruco_sub_;
@@ -56,13 +66,17 @@ private:
   double alpha_yaw_;
   double sigma_dist_;
   double aruco_yaw_offset_;
+  double multi_marker_covariance_gain_;
+  double pose_covariance_xy_;
+  double pose_covariance_z_;
+  double pose_covariance_yaw_;
 
   std::string mesh_path_;
   std::vector<double> mesh_scale_;
   std::vector<double> mesh_pos_;
   double mesh_yaw_;
 
-  std::map<int, Eigen::Vector3d> aruco_map_;
+  std::map<int, ArucoMarker> aruco_map_;
 
   bool first_measurement_;
   Eigen::Vector3d prev_pos_;

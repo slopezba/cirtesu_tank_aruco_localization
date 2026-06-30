@@ -1,19 +1,23 @@
 aruco_map_localization:
   ros__parameters:
-    alpha_pos: 0.4
-    alpha_yaw: 0.3
+    alpha_pos: 0.25
+    alpha_yaw: 0.20
 
     sigma_dist: 1.0
     aruco_yaw_offset: 0.0
+    multi_marker_covariance_gain: 0.10
+    pose_covariance_xy: 0.35
+    pose_covariance_z: 0.005
+    pose_covariance_yaw: 0.45
 
-    world_frame: world_enu
+    world_frame: /world_ned
     marker_frame: cirtesu_tank
-    base_frame: cirtesub/base_link
-    camera_frame: cirtesub/down_camera/camera
+    base_frame: base_link
+    camera_frame: camera_down/optical_frame
 
-    aruco_topic: /cirtesub/down_camera/aruco_detections
-    marker_topic: /cirtesub/aruco/markers
-    pose_topic: /cirtesub/sensors/aruco/pose_enu
+    aruco_topic: down_camera/aruco_detections
+    marker_topic: aruco/markers
+    pose_topic: sensors/aruco/pose_enu
 
     mesh_path: package://cirtesu_tank_aruco_localization/meshes/cirtesu.dae
 
@@ -22,12 +26,13 @@ aruco_map_localization:
     mesh_yaw: 0.0
 
     aruco_map:
-      "0": [-1.35, 3.0, 5.0]
-      "1": [-4.35, -3.0, 5.0]
-      "2": [1.65, 0.0, 5.0]
-      "3": [1.65, 3.0, 5.0]
-      "4": [-1.35, 0.0, 5.0]
-      "5": [-4.35, 3.0, 5.0]
-      "6": [-4.35, 0.0, 5.0]
-      "7": [-1.35, -3.0, 5.0]
-      "8": [1.65, -3.0, 5.0]
+      # [x, y, z, yaw] in marker_frame. yaw is in radians.
+      "0": [-1.35, 3.0, 5.0, 1.57079632679]
+      "1": [-4.35, -3.0, 5.0, 1.57079632679]
+      "2": [1.65, 0.0, 5.0, 1.57079632679]
+      "3": [1.65, 3.0, 5.0, 1.57079632679]
+      "4": [-1.35, 0.0, 5.0, 1.57079632679]
+      "5": [-4.35, 3.0, 5.0, 1.57079632679]
+      "6": [-4.35, 0.0, 5.0, 1.57079632679]
+      "7": [-1.35, -3.0, 5.0, 1.57079632679]
+      "8": [1.65, -3.0, 5.0, 1.57079632679]

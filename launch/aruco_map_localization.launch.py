@@ -1,5 +1,5 @@
 import os
-from pathlib import Path
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -8,16 +8,10 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def namespaced_config(config_file, robot_namespace):
-    text = Path(config_file).read_text(encoding="utf-8")
-    text = text.replace("/cirtesub/", f"/{robot_namespace}/")
-    text = text.replace("cirtesub/", f"{robot_namespace}/")
-    text = text.replace("cirtesub_", f"{robot_namespace}_")
-
-    safe_namespace = robot_namespace.replace("/", "_")
-    output_file = f"/tmp/aruco_map_localization_{safe_namespace}_{Path(config_file).name}"
-    Path(output_file).write_text(text, encoding="utf-8")
-    return output_file
+def load_node_parameters(config_path, node_name):
+    with open(config_path, "r", encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file) or {}
+    return config.get(node_name, {}).get("ros__parameters", {})
 
 
 def launch_setup(context, *args, **kwargs):
@@ -26,9 +20,9 @@ def launch_setup(context, *args, **kwargs):
         raise RuntimeError("Launch argument 'robot_namespace' cannot be empty.")
 
     aruco_share = get_package_share_directory("cirtesu_tank_aruco_localization")
-    config_file = namespaced_config(
+    aruco_params = load_node_parameters(
         os.path.join(aruco_share, "config", "aruco_map.yaml"),
-        robot_namespace,
+        "aruco_map_localization",
     )
 
     return [
@@ -36,8 +30,9 @@ def launch_setup(context, *args, **kwargs):
             package="cirtesu_tank_aruco_localization",
             executable="aruco_map_localization_node",
             name="aruco_map_localization",
+            namespace=f"/{robot_namespace}",
             output="screen",
-            parameters=[config_file],
+            parameters=[aruco_params],
         ),
     ]
 

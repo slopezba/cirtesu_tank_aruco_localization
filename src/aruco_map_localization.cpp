@@ -9,6 +9,22 @@
 #include <cmath>
 #include <cstdlib>
 
+namespace
+{
+
+bool isFinitePose(const geometry_msgs::msg::Pose& pose)
+{
+  return std::isfinite(pose.position.x) &&
+         std::isfinite(pose.position.y) &&
+         std::isfinite(pose.position.z) &&
+         std::isfinite(pose.orientation.x) &&
+         std::isfinite(pose.orientation.y) &&
+         std::isfinite(pose.orientation.z) &&
+         std::isfinite(pose.orientation.w);
+}
+
+}  // namespace
+
 ArucoMapLocalization::ArucoMapLocalization(const rclcpp::NodeOptions& options)
 : rclcpp::Node("aruco_map_localization", options),
   tf_buffer_(get_clock()),
@@ -352,12 +368,18 @@ void ArucoMapLocalization::arucoCallback(const ArucoDetection::SharedPtr msg)
     geometry_msgs::msg::PoseStamped cam_marker;
     cam_marker.header = msg->header;
     cam_marker.pose = marker.pose;
+    if (!isFinitePose(cam_marker.pose)) {
+      continue;
+    }
 
     geometry_msgs::msg::PoseStamped base_marker;
 
     try {
       tf2::doTransform(cam_marker, base_marker, tf_base_cam);
     } catch (const tf2::TransformException&) {
+      continue;
+    }
+    if (!isFinitePose(base_marker.pose)) {
       continue;
     }
 
@@ -380,9 +402,15 @@ void ArucoMapLocalization::arucoCallback(const ArucoDetection::SharedPtr msg)
 
     const double marker_yaw_world = transformMapYaw(map_marker.yaw, tf_world_map);
     const double yaw_robot = normalizeAngle(marker_yaw_world - yaw_marker + aruco_yaw_offset_);
+    if (!std::isfinite(yaw_robot)) {
+      continue;
+    }
 
     const Eigen::Vector3d marker_offset_world = baseVectorToWorld(base_pos, yaw_robot);
     const Eigen::Vector3d robot_est = world_marker - marker_offset_world;
+    if (!robot_est.allFinite()) {
+      continue;
+    }
 
     estimates.push_back(robot_est);
     weights.push_back(weight);
@@ -416,7 +444,7 @@ void ArucoMapLocalization::arucoCallback(const ArucoDetection::SharedPtr msg)
   Eigen::Vector3d filt_pos;
   double filt_yaw = 0.0;
 
-  if (first_measurement_) {
+  if (first_measurement_ || !prev_pos_.allFinite() || !std::isfinite(prev_yaw_)) {
     filt_pos = mean_pos;
     filt_yaw = mean_yaw;
     first_measurement_ = false;
@@ -424,6 +452,15 @@ void ArucoMapLocalization::arucoCallback(const ArucoDetection::SharedPtr msg)
     filt_pos = alpha_pos_ * mean_pos + (1.0 - alpha_pos_) * prev_pos_;
     const double dyaw = normalizeAngle(mean_yaw - prev_yaw_);
     filt_yaw = prev_yaw_ + alpha_yaw_ * dyaw;
+  }
+  if (!filt_pos.allFinite() || !std::isfinite(filt_yaw)) {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "Skipping non-finite ArUco pose estimate.");
+    first_measurement_ = true;
+    return;
   }
 
   prev_pos_ = filt_pos;
